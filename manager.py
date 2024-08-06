@@ -22,7 +22,7 @@ class RunRequest(BaseModel):
 
 
 class RunResponse(BaseModel):
-    result: t.List | t.Dict
+    result: t.Any
 
 
 @app.get("/")
