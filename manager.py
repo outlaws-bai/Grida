@@ -1,21 +1,28 @@
 import os
 import frida
 import typing as t
+from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel
-from fastapi.responses import JSONResponse
+from common import patch_frida_rpc_func_name_convert
+
+patch_frida_rpc_func_name_convert()
 
 app = FastAPI()
-compile_template = "frida-compile scripts/hooks/{script_name}.ts -o scripts/compiled/{script_name}.js -c"
+
+compiled_dir = Path.cwd() / "scripts" / "compiled"
+if not compiled_dir.exists():
+    compiled_dir.mkdir()
+compile_template = f"frida-compile scripts/hooks/{{script_name}}.js -o {compiled_dir}/{{script_name}}.js -c"
 
 
 class RunRequest(BaseModel):
     name: str
-    args: list[str]
+    args: t.List[str]
 
 
 class RunResponse(BaseModel):
-    result: t.Any
+    result: t.List | t.Dict
 
 
 @app.get("/")
@@ -26,8 +33,8 @@ async def health():
 @app.post("/call", response_model=RunResponse)
 async def call_func(request: RunRequest):
     print(f"call func, name: {request.name}, args: {request.args}")
-    func = getattr(script.exports_sync, request.name)
-    result = func(*request.args)
+    func = getattr(script.exports_async, request.name)
+    result = await func(*request.args)
     print(f"run result: {request.args}")
     return RunResponse(result=result)
 
@@ -40,10 +47,16 @@ async def list_funcs():
 
 if __name__ == "__main__":
     package = ["owasp.mstg.uncrackable1"]
-    # script_name = "scripts/test"
+    frida_conn = "127.0.0.1:7777"
     script_name = "test"
-    os.system(compile_template.format(script_name=script_name))
-    device = frida.get_device_manager().add_remote_device("127.0.0.1:7777")
+
+    # compile js
+    compile_res = os.system(compile_template.format(script_name=script_name))
+    if compile_res != 0:
+        exit(f"compile error: {compile_res}")
+
+    # start frida
+    device = frida.get_device_manager().add_remote_device(frida_conn)
     pid = device.spawn(package)
     session = device.attach(pid)
     with open("scripts/compiled/" + script_name + ".js", "r", encoding="utf-8") as f:
@@ -51,6 +64,8 @@ if __name__ == "__main__":
     script = session.create_script(script_content)
     script.load()
     print("loaded func: " + str(dir(script.exports_sync)))
+
+    # start web
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
